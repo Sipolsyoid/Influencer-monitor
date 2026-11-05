@@ -26,7 +26,7 @@ You need **Python 3.9 or newer** ([download](https://www.python.org/downloads/);
 ### 1. Download
 
 ```bash
-git clone https://github.com/Sipolsyoid/gg.git influencer-monitor
+git clone https://github.com/Sipolsyoid/influencer-monitor.git influencer-monitor
 cd influencer-monitor
 ```
 
@@ -93,7 +93,7 @@ A server has no screen, so you can't log in to Instagram on it. Instead, **log i
 You need [Docker](https://docs.docker.com/engine/install/) installed on the server.
 
 ```bash
-git clone https://github.com/Sipolsyoid/gg.git influencer-monitor
+git clone https://github.com/Sipolsyoid/influencer-monitor.git influencer-monitor
 cd influencer-monitor
 cp .env.example .env
 nano .env            # fill in EMAIL_TO, SMTP_USER, SMTP_PASSWORD and RUN_TIME

@@ -5,3 +5,5 @@ reports/
 logs/
 __pycache__/
 instagram-session.json
+data/
+Claude outputs/
