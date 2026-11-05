@@ -125,8 +125,21 @@ def open_browser(p, headless, offscreen=False):
     if offscreen and not headless:
         # A normal Chrome window, placed far outside the screen so nobody sees it.
         opts["args"] += ["--window-position=-32000,-32000", "--window-size=1280,900"]
+    def clear_locks(folder):
+        # A run that was stopped (Ctrl+C, crash, restart) leaves "profile in use" lock files behind,
+        # which make the next start fail. Only one check runs at a time, so it is safe to remove them.
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+            try:
+                (folder / name).unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as e:
+                log(f"Could not remove old browser lock {name}: {e}")
+
     def launch(extra):
         o = dict(opts, **extra)
+        clear_locks(PROFILE_DIR)
+        clear_locks(PROFILE_DIR / "chromium")
         if cfg("BROWSER", "chrome").lower() == "chrome":
             try:
                 return p.chromium.launch_persistent_context(str(PROFILE_DIR), channel="chrome", **o)
