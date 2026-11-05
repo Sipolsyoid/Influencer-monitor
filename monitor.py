@@ -29,6 +29,7 @@ PROFILE_DIR = ROOT / "browser-profile"
 DATA_DIR = ROOT / "data"
 REPORTS_DIR = ROOT / "reports"
 SNAPSHOT = DATA_DIR / "influencers_reels_posts.json"
+OWNERS_FILE = DATA_DIR / "reel_owners.json"     # reel id -> who posted it (never changes, so cached)
 SESSION_FILE = ROOT / "instagram-session.json"   # login cookies, for copying the login to a server
 
 
@@ -146,7 +147,7 @@ def open_browser(p, headless, offscreen=False):
     return ctx, page
 
 
-def fetch(page, path, tries=4):
+def fetch(page, path, tries=3):
     """Fetch an Instagram page from inside the logged-in browser. Returns HTML."""
     for attempt in range(tries):
         status, text = page.evaluate(
@@ -186,8 +187,9 @@ def collect_links(page, url, kinds=("reel", "p"), idle_rounds=8):
     return seen
 
 
-def scrape(page, account, delay):
-    """Return ({username: {'reels': {id: date}, 'posts': {id: date}}}, notes)."""
+def scrape(page, account, delay, owners):
+    """Return ({username: {'reels': {id: date}, 'posts': {id: date}}}, notes).
+    owners: cache {reel id: {"u": username, "d": date}}, updated in place."""
     people, notes = {}, []
 
     def add(user, kind, sid, date=None):
@@ -201,19 +203,29 @@ def scrape(page, account, delay):
     # 1. Reels tab: collab reels. The grid links don't show the owner, so open each one.
     log("Collecting the Reels tab")
     reel_links = collect_links(page, f"https://www.instagram.com/{account}/reels/", kinds=("reel",))
-    log(f"  {len(reel_links)} reels found, checking who posted each")
-    for i, href in enumerate(reel_links, 1):
-        _, _, sid = split_href(href)
-        if not sid:
+    ids = [sid for _, _, sid in map(split_href, reel_links) if sid]
+    new_ids = [sid for sid in ids if sid not in owners]
+    log(f"  {len(ids)} reels found, {len(new_ids)} new ones to check (the rest are already known)")
+    blocked = 0
+    for sid in ids:
+        if sid in owners:
+            add(owners[sid]["u"], "reel", sid, owners[sid].get("d"))
+            continue
+        if blocked:
+            blocked += 1
             continue
         try:
             owner, date = parse_owner(og_description(fetch(page, f"/reel/{sid}/")))
         except RateLimited:
-            notes.append(f"Instagram blocked requests after {i - 1} of {len(reel_links)} reels; "
-                         "the rest were not checked.")
-            break
-        add(owner, "reel", sid, date)
+            blocked = 1
+            continue
+        if owner:
+            owners[sid] = {"u": owner, "d": date}
+            add(owner, "reel", sid, date)
         time.sleep(delay)
+    if blocked:
+        notes.append(f"Instagram blocked requests, so {blocked} new reels could not be checked yet. "
+                     "They will be checked on the next run.")
 
     # 2. Tagged tab: owner is in the link itself.
     log("Collecting the Tagged tab")
@@ -248,6 +260,17 @@ def load_snapshot():
         return {}
     data = json.loads(SNAPSHOT.read_text(encoding="utf-8"))
     return {e["username"]: e for e in data}
+
+
+def load_owners(old):
+    """Known reel owners: from the cache file, plus every reel id already in the snapshot."""
+    owners = {}
+    if OWNERS_FILE.exists():
+        owners = json.loads(OWNERS_FILE.read_text(encoding="utf-8"))
+    for u, e in old.items():
+        for sid in e.get("reel_ids", []):
+            owners.setdefault(sid, {"u": u})
+    return owners
 
 
 def build_snapshot(people, counts, old):
@@ -505,7 +528,9 @@ def run(send=True):
             page.wait_for_timeout(3000)
             if not has_session(ctx) or "/accounts/login" in page.url:
                 raise NotLoggedIn()
-            people, notes = scrape(page, account, delay)
+            owners = load_owners(old)
+            people, notes = scrape(page, account, delay, owners)
+            OWNERS_FILE.write_text(json.dumps(owners, indent=0), encoding="utf-8")
             counts = follower_counts(page, sorted(people), delay, notes)
             if SESSION_FILE.exists():
                 save_session(ctx)  # keep the copied login fresh

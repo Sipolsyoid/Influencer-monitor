@@ -9,6 +9,7 @@ services:
       - BROWSER=chromium
       - HEADLESS=false
       - HIDE_WINDOW=false
+      - REQUEST_DELAY_SECONDS=2   # slower = fewer Instagram blocks from a data-center IP
     volumes:
       - ./data:/app/data                          # saved influencer list
       - ./reports:/app/reports                    # copies of the daily reports
