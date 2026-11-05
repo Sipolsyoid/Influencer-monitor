@@ -1,0 +1,16 @@
+services:
+  monitor:
+    build: .
+    container_name: influencer-monitor
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=Europe/Riga            # time zone for RUN_TIME
+      - BROWSER=chromium
+      - HEADLESS=false
+      - HIDE_WINDOW=false
+    volumes:
+      - ./data:/app/data                          # saved influencer list
+      - ./reports:/app/reports                    # copies of the daily reports
+      - ./browser-profile:/app/browser-profile    # browser data
+      - ./instagram-session.json:/app/instagram-session.json   # Instagram login copied from your PC

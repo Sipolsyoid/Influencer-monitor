@@ -29,6 +29,7 @@ PROFILE_DIR = ROOT / "browser-profile"
 DATA_DIR = ROOT / "data"
 REPORTS_DIR = ROOT / "reports"
 SNAPSHOT = DATA_DIR / "influencers_reels_posts.json"
+SESSION_FILE = ROOT / "instagram-session.json"   # login cookies, for copying the login to a server
 
 
 # ---------------------------------------------------------------- config
@@ -114,15 +115,33 @@ class NotLoggedIn(Exception):
     pass
 
 
-def open_browser(p, headless):
+def open_browser(p, headless, offscreen=False):
+    """Use the computer's own Google Chrome when available (Instagram trusts it more),
+    otherwise Playwright's built-in Chromium. Set BROWSER=chromium in .env to force the latter."""
     PROFILE_DIR.mkdir(exist_ok=True)
-    ctx = p.chromium.launch_persistent_context(
-        str(PROFILE_DIR),
-        headless=headless,
-        viewport={"width": 1280, "height": 900},
-        locale="en-US",
-        args=["--lang=en-US"],
-    )
+    opts = dict(headless=headless, viewport={"width": 1280, "height": 900},
+                locale="en-US", args=["--lang=en-US", "--disable-blink-features=AutomationControlled"])
+    if offscreen and not headless:
+        # A normal Chrome window, placed far outside the screen so nobody sees it.
+        opts["args"] += ["--window-position=-32000,-32000", "--window-size=1280,900"]
+    def launch(extra):
+        o = dict(opts, **extra)
+        if cfg("BROWSER", "chrome").lower() == "chrome":
+            try:
+                return p.chromium.launch_persistent_context(str(PROFILE_DIR), channel="chrome", **o)
+            except Exception as e:
+                log(f"Google Chrome not available ({str(e).splitlines()[0]}), using built-in Chromium")
+        return p.chromium.launch_persistent_context(str(PROFILE_DIR / "chromium"), **o)
+
+    ctx = launch({})
+    if headless:
+        # Hidden Chrome announces itself as "HeadlessChrome", which Instagram treats as logged out.
+        # Relaunch with the normal Chrome user agent.
+        pg = ctx.pages[0] if ctx.pages else ctx.new_page()
+        ua = pg.evaluate("navigator.userAgent")
+        if "Headless" in ua:
+            ctx.close()
+            ctx = launch({"user_agent": ua.replace("HeadlessChrome", "Chrome")})
     page = ctx.pages[0] if ctx.pages else ctx.new_page()
     return ctx, page
 
@@ -396,16 +415,52 @@ def send_email(subject, html_body, text_body):
     msg["To"] = ", ".join(to)
     msg.attach(MIMEText(text_body, "plain", "utf-8"))
     msg.attach(MIMEText(html_body, "html", "utf-8"))
-    if port == 465:
-        server = smtplib.SMTP_SSL(host, port, timeout=60)
-    else:
-        server = smtplib.SMTP(host, port, timeout=60)
-        server.starttls()
-    with server:
-        server.login(user, pw)
-        server.sendmail(msg["From"], to, msg.as_string())
+    try:
+        if port == 465:
+            server = smtplib.SMTP_SSL(host, port, timeout=60)
+        else:
+            server = smtplib.SMTP(host, port, timeout=60)
+            server.starttls()
+        with server:
+            server.login(user, pw.replace(" ", ""))
+            server.sendmail(msg["From"], to, msg.as_string())
+    except (smtplib.SMTPAuthenticationError, smtplib.SMTPServerDisconnected) as e:
+        log(f"Email login failed ({type(e).__name__}). The email server did not accept "
+            f"SMTP_USER / SMTP_PASSWORD in .env. For Gmail, SMTP_USER must be the full address "
+            f"and SMTP_PASSWORD a 16-letter App password (https://myaccount.google.com/apppasswords), "
+            f"not your normal password. If that is correct, try SMTP_PORT=465.")
+        return False
+    except (OSError, smtplib.SMTPException) as e:
+        log(f"Could not send email via {host}:{port}: {e}. Check SMTP_HOST and SMTP_PORT in .env, "
+            f"and whether antivirus or a firewall blocks outgoing email.")
+        return False
     log(f"Email sent to {', '.join(to)}")
     return True
+
+
+# ---------------------------------------------------------------- session file
+
+def ig_cookies(ctx):
+    return [c for c in ctx.cookies() if "instagram.com" in c.get("domain", "")]
+
+
+def has_session(ctx):
+    return any(c["name"] == "sessionid" for c in ig_cookies(ctx))
+
+
+def save_session(ctx):
+    SESSION_FILE.write_text(json.dumps(ig_cookies(ctx), indent=2), encoding="utf-8")
+
+
+def load_session(ctx):
+    """On a server: put the login copied from another computer into the browser."""
+    if has_session(ctx) or not SESSION_FILE.exists():
+        return
+    try:
+        ctx.add_cookies(json.loads(SESSION_FILE.read_text(encoding="utf-8")))
+        log(f"Loaded Instagram login from {SESSION_FILE.name}")
+    except Exception as e:
+        log(f"Could not read {SESSION_FILE.name}: {e}")
 
 
 # ---------------------------------------------------------------- main
@@ -416,16 +471,26 @@ def do_login():
         ctx, page = open_browser(p, headless=False)
         page.goto("https://www.instagram.com/accounts/login/")
         print("\nLog in to Instagram in the browser window that just opened.")
+        print("If Instagram asks for a code: check the app on your phone for 'Was this you?',")
+        print("or use 'Try another way' to get the code by SMS. Take your time.")
         input("When you can see your Instagram feed, come back here and press Enter... ")
+        logged_in = has_session(ctx)
+        if logged_in:
+            save_session(ctx)
         ctx.close()
-    print("Login saved in the browser-profile folder. You can now run: python monitor.py")
+    if logged_in:
+        print("Login saved. You can now run: python monitor.py")
+        print(f"To run the monitor on a server, copy {SESSION_FILE.name} to the server's project folder.")
+    else:
+        print("It looks like the login did not finish. Run python monitor.py --login again.")
 
 
 def run(send=True):
     from playwright.sync_api import sync_playwright
     account = cfg("INSTAGRAM_ACCOUNT", "editorialcuentosconvalores").lstrip("@")
     delay = float(cfg("REQUEST_DELAY_SECONDS", "1.0"))
-    headless = cfg("HEADLESS", "true").lower() != "false"
+    headless = cfg("HEADLESS", "false").lower() == "true"
+    offscreen = cfg("HIDE_WINDOW", "true").lower() != "false"
     today = datetime.now().strftime("%Y-%m-%d")
     subject = f"@{account} influencer report {today}"
     DATA_DIR.mkdir(exist_ok=True)
@@ -433,16 +498,22 @@ def run(send=True):
 
     old = load_snapshot()
     with sync_playwright() as p:
-        ctx, page = open_browser(p, headless)
+        ctx, page = open_browser(p, headless, offscreen=offscreen)
         try:
+            load_session(ctx)
             page.goto("https://www.instagram.com/", wait_until="domcontentloaded")
             page.wait_for_timeout(3000)
+            if not has_session(ctx) or "/accounts/login" in page.url:
+                raise NotLoggedIn()
             people, notes = scrape(page, account, delay)
             counts = follower_counts(page, sorted(people), delay, notes)
+            if SESSION_FILE.exists():
+                save_session(ctx)  # keep the copied login fresh
         except NotLoggedIn:
             log("Not logged in to Instagram")
             msg = ("The influencer check could not run because the Instagram login has expired. "
-                   "Run setup again (or: python monitor.py --login) and log in.")
+                   "On a computer with a screen, run: python monitor.py --login and log in. "
+                   f"If the monitor runs on a server, then copy the new {SESSION_FILE.name} to the server.")
             if send:
                 send_email(f"{subject}: Instagram login needed", f"<p>{msg}</p>", msg)
             return 2
@@ -470,13 +541,38 @@ def run(send=True):
     return 0
 
 
+def daemon():
+    """Stay running and do one check every day at RUN_TIME (used on servers / Docker)."""
+    from datetime import timedelta
+    hh, mm = (int(x) for x in cfg("RUN_TIME", "13:00").split(":"))
+    log(f"Monitor started, daily check at {hh:02d}:{mm:02d}")
+    while True:
+        now = datetime.now()
+        nxt = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if nxt <= now:
+            nxt += timedelta(days=1)
+        log(f"Next check: {nxt:%Y-%m-%d %H:%M}")
+        time.sleep(max(1, (nxt - datetime.now()).total_seconds()))
+        try:
+            run(send=True)
+        except Exception as e:  # never let one bad day stop the daily schedule
+            log(f"Check failed: {e!r}")
+            send_email("Influencer monitor: check failed",
+                       f"<p>Today's check stopped with an error:</p><pre>{html.escape(repr(e))}</pre>",
+                       f"Today's check stopped with an error: {e!r}")
+
+
 def main():
     load_env()
     ap = argparse.ArgumentParser(description="Instagram influencer monitor")
     ap.add_argument("--login", action="store_true", help="open a browser window to log in to Instagram")
     ap.add_argument("--no-email", action="store_true", help="save the report without emailing it")
     ap.add_argument("--test-email", action="store_true", help="send a test email and exit")
+    ap.add_argument("--daemon", action="store_true", help="keep running and check every day at RUN_TIME")
     a = ap.parse_args()
+    if a.daemon:
+        daemon()
+        return 0
     if a.login:
         do_login()
         return 0

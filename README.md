@@ -61,7 +61,8 @@ The setup does five things:
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | The email account that sends the report |
 | `RUN_TIME` | Daily time, e.g. `13:00` (run the schedule script again after changing it) |
 | `REQUEST_DELAY_SECONDS` | Pause between Instagram requests; raise it if Instagram blocks you |
-| `HEADLESS` | `false` shows the browser while it works |
+| `HIDE_WINDOW` | `true` (default) runs Chrome off-screen so no window appears; `false` shows it |
+| `HEADLESS` | `true` uses Chrome's invisible mode instead (Instagram may log it out, so keep `false`) |
 
 ## Everyday use
 
@@ -75,6 +76,58 @@ There's nothing to do. The check runs every day at `RUN_TIME` while the computer
 | Test the email settings | `python monitor.py --test-email` |
 | See what happened | `logs/monitor.log` |
 | Stop the daily check | Windows: delete "Instagram Influencer Monitor" in Task Scheduler. Others: `crontab -e` and remove the line |
+
+## Run on a server (recommended for teams)
+
+The monitor can run on any Linux server, such as a small VPS (Hetzner, DigitalOcean, OVH, about EUR 4-6 per month) or a company server. It then works around the clock without anyone's computer being on.
+
+A server has no screen, so you can't log in to Instagram on it. Instead, **log in on your own computer once and copy the login to the server**.
+
+### 1. On your own computer
+
+1. Do the normal setup above, and run `python monitor.py --login`.
+2. After the login, the project folder contains **`instagram-session.json`**. This is your Instagram login, so treat it like a password: never upload it to GitHub (it is in `.gitignore`) and never send it to anyone.
+
+### 2. On the server
+
+You need [Docker](https://docs.docker.com/engine/install/) installed on the server.
+
+```bash
+git clone https://github.com/Sipolsyoid/gg.git influencer-monitor
+cd influencer-monitor
+cp .env.example .env
+nano .env            # fill in EMAIL_TO, SMTP_USER, SMTP_PASSWORD and RUN_TIME
+```
+
+Copy the login file from your computer to the server, into the same folder. For example, run this from your own computer:
+
+```bash
+scp instagram-session.json user@your-server:influencer-monitor/
+```
+
+The file must be on the server **before** the next step. Otherwise Docker creates an empty folder with that name.
+
+Start it:
+
+```bash
+docker compose up -d --build
+```
+
+That's it. The monitor now checks every day at `RUN_TIME` (Riga time; change `TZ` in `docker-compose.yml` for another time zone) and emails the report. It restarts by itself after a server reboot.
+
+| To... | Run on the server |
+|---|---|
+| See what it is doing | `docker compose logs -f` |
+| Run a check right now | `docker compose exec monitor xvfb-run -a python monitor.py` |
+| Test the email | `docker compose exec monitor python monitor.py --test-email` |
+| Update to the newest version | `git pull && docker compose up -d --build` |
+| Stop it | `docker compose down` |
+
+**When Instagram logs out the server** (the email will say so): on your own computer run `python monitor.py --login` again, copy the new `instagram-session.json` to the server with `scp`, and run `docker compose restart`.
+
+**Good to know:**
+- Instagram sometimes asks for a security check when a login suddenly appears on a server in another country. Choose a server in your own country (or near it) to reduce this. If it keeps happening, approve the "Was this you?" notice in the Instagram app.
+- **Use a separate Instagram account** for the monitor, not your personal one. Then a security check or a temporary block never affects your own account.
 
 ## Things to know
 
