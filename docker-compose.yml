@@ -3,6 +3,7 @@ services:
     build: .
     container_name: influencer-monitor
     restart: unless-stopped
+    init: true                    # needed so the virtual screen (xvfb-run) starts properly
     env_file: .env
     environment:
       - TZ=Europe/Riga            # time zone for RUN_TIME
