@@ -67,6 +67,17 @@ The setup does five things:
 | `HIDE_WINDOW` | `true` (default) runs Chrome off-screen so no window appears; `false` shows it |
 | `HEADLESS` | `true` uses Chrome's invisible mode instead (Instagram may log it out, so keep `false`) |
 
+## Web dashboard
+
+The server also runs a dashboard at **http://&lt;server-ip&gt;:8080** that updates after every daily scan:
+
+- **Daily changes:** what each scan found (new influencers, new reels and posts, follower changes, new product mentions)
+- **Find @influencer:** type an @username to see their name, followers, every reel and post with the account (with captions) and which products they featured
+- **Products:** everyone who featured a product, sorted by followers
+- **All influencers:** searchable, sortable table
+
+Set `DASHBOARD_PASSWORD` in `.env` to protect it (the browser asks for it; any username works). To run it on your own computer instead: `python dashboard.py`, then open http://localhost:8080.
+
 ## Everyday use
 
 There's nothing to do. The check runs every day at `RUN_TIME` while the computer is on and you're signed in to it. A run takes about 10 to 20 minutes, because it pauses between requests so Instagram doesn't block it.

@@ -31,6 +31,7 @@ REPORTS_DIR = ROOT / "reports"
 SNAPSHOT = DATA_DIR / "influencers_reels_posts.json"
 OWNERS_FILE = DATA_DIR / "reel_owners.json"     # reel id -> who posted it (never changes, so cached)
 PRODUCTS_FILE = DATA_DIR / "product_influencers.json"   # who featured which product
+HISTORY_FILE = DATA_DIR / "history.json"                 # what changed in each daily scan (for the dashboard)
 SESSION_FILE = ROOT / "instagram-session.json"   # login cookies, for copying the login to a server
 
 
@@ -358,6 +359,7 @@ def build_snapshot(people, counts, old, names=None):
             "post_ids": post_ids,
             "followers_checked": checked,
             "name": (names or {}).get(u) or old.get(u, {}).get("name", ""),
+            "first_seen": old.get(u, {}).get("first_seen") or (datetime.now().strftime("%Y-%m-%d") if old else ""),
         })
     out.sort(key=lambda o: (-o["total"], -(o["followers"] or 0), o["username"]))
     return out
@@ -485,6 +487,33 @@ def match_products(people, owners, new_list, products, today):
         rows.sort(key=lambda r: (-(r["followers"] or 0), r["username"]))
         result[product] = rows
     return result, new_people
+
+
+def save_history(today, ch, new_list, product_rows, product_new, notes):
+    """Append today's changes to data/history.json (newest first, last 180 scans)."""
+    history = []
+    if HISTORY_FILE.exists():
+        try:
+            history = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            history = []
+    history = [h for h in history if h.get("date") != today]
+    history.insert(0, {
+        "date": today,
+        "summary": summary_line(ch),
+        "totals": {"influencers": len(new_list), "reels": sum(e["reels"] for e in new_list),
+                   "posts": sum(e["posts"] for e in new_list)},
+        "new_influencers": [{"username": e["username"], "followers": e["followers"]} for e in ch["new_people"]],
+        "new_content": [{"username": c["username"], "reels": c["reel_ids"], "posts": c["post_ids"],
+                         "n_reels": c["n_reels"], "n_posts": c["n_posts"]} for c in ch["new_content"]],
+        "follower_changes": ch["followers"],
+        "gone": [e["username"] for e in ch["gone"]],
+        "product_new": {p: [{"username": r["username"], "followers": r["followers"]} for r in rows]
+                        for p, rows in (product_new or {}).items()},
+        "product_totals": {p: len(rows) for p, rows in (product_rows or {}).items()},
+        "notes": notes,
+    })
+    HISTORY_FILE.write_text(json.dumps(history[:180], ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def save_products(result, today):
@@ -754,6 +783,7 @@ def run(send=True):
         if products:
             save_products(product_rows, today)
             log("Product list saved: " + ", ".join(f"{k} {len(v)}" for k, v in product_rows.items()))
+        save_history(today, ch, new_list, product_rows, product_new, notes)
     return 0
 
 

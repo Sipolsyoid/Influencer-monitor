@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Influencer Monitor</title>
+<style>
+/* Layout: header with last scan, tab bar, one working view per tab */
+:root{
+  --bg:#f5f6f3; --surface:#ffffff; --ink:#1d2420; --muted:#5f6a63; --line:#dfe3dd;
+  --accent:#2f6b4f; --accent-soft:#e2efe7; --warm:#c8692a; --warm-soft:#fbe9dc; --bad:#b3402e;
+  --font:"Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+}
+@media (prefers-color-scheme: dark){:root{
+  --bg:#131815; --surface:#1a201c; --ink:#e6ece8; --muted:#9aa69f; --line:#2b342f;
+  --accent:#7cc39d; --accent-soft:#213429; --warm:#eea36a; --warm-soft:#38281b; --bad:#ec8a78; color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 var(--font)}
+.wrap{max-width:1100px;margin:0 auto;padding:24px 16px 56px}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px 24px}
+h1{margin:0;font-size:24px;letter-spacing:-.01em}
+h1 a{color:var(--accent);text-decoration:none}
+.sub{color:var(--muted);font-size:13px}
+nav{display:flex;gap:4px;margin:20px 0 16px;border-bottom:1px solid var(--line);overflow-x:auto}
+nav button{all:unset;cursor:pointer;padding:10px 14px;color:var(--muted);font-weight:600;border-bottom:2px solid transparent;white-space:nowrap}
+nav button[aria-selected=true]{color:var(--ink);border-color:var(--accent)}
+nav button:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--warm);outline-offset:2px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
+.stat{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.stat b{display:block;font-size:26px;font-variant-numeric:tabular-nums}
+.stat span{font-size:12px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+h2{font-size:17px;margin:0 0 12px}
+.scan{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.scan h3{margin:0 0 4px;font-size:15px}
+.scan .sum{color:var(--muted);margin:0 0 8px}
+.scan ul{margin:6px 0 0;padding-left:18px}
+.scan li{margin:2px 0}
+.tag{display:inline-block;font-size:11px;font-weight:600;padding:1px 8px;border-radius:999px;background:var(--accent-soft);color:var(--accent);margin-left:6px;vertical-align:1px}
+.tag.warm{background:var(--warm-soft);color:var(--warm)}
+.up{color:var(--accent)} .down{color:var(--bad)}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:12px}
+input[type=search],select{font:inherit;padding:9px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface);color:var(--ink)}
+input[type=search]{flex:1 1 260px;min-width:0}
+.box{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:10px}
+table{width:100%;border-collapse:collapse;min-width:640px}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);white-space:nowrap}
+th button{all:unset;cursor:pointer}
+td.n{font-variant-numeric:tabular-nums;white-space:nowrap}
+tr:last-child td{border-bottom:0}
+tbody tr{cursor:pointer} tbody tr:hover{background:var(--accent-soft)}
+a{color:var(--accent)}
+.who{overflow-wrap:anywhere} .who b{display:block} .who small{color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:20px;margin-top:8px}
+.card h2{font-size:21px;margin:0}
+.card .meta{display:flex;flex-wrap:wrap;gap:6px 20px;color:var(--muted);margin:6px 0 14px}
+.posts{display:grid;gap:8px;margin-top:10px}
+.post{border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+.post .top{display:flex;gap:10px;justify-content:space-between;font-size:13px;color:var(--muted)}
+.post p{margin:4px 0 0;overflow-wrap:anywhere}
+mark{background:var(--warm-soft);color:var(--ink);padding:0 2px;border-radius:3px}
+.empty{color:var(--muted);padding:16px}
+.suggest{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 10px}
+.suggest button{font:inherit;font-size:13px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:999px;padding:4px 10px;cursor:pointer}
+@media (max-width:640px){table{min-width:0}.sm-hide{display:none}td.who{width:70%}}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Influencer Monitor · <a id="acct" href="https://www.instagram.com/editorialcuentosconvalores/" target="_blank" rel="noopener">@editorialcuentosconvalores</a></h1>
+    <div class="sub" id="updated">Loading…</div>
+  </header>
+
+  <nav role="tablist">
+    <button role="tab" data-tab="overview" aria-selected="true">Daily changes</button>
+    <button role="tab" data-tab="search" aria-selected="false">Find @influencer</button>
+    <button role="tab" data-tab="products" aria-selected="false">Products</button>
+    <button role="tab" data-tab="all" aria-selected="false">All influencers</button>
+  </nav>
+
+  <section id="overview">
+    <div class="stats" id="stats"></div>
+    <h2>What changed in each daily scan</h2>
+    <div id="scans"></div>
+  </section>
+
+  <section id="search" hidden>
+    <div class="bar"><input type="search" id="q" placeholder="Type @username or a name, e.g. @maestra_teresa_arcoiris" aria-label="Find an influencer"></div>
+    <div class="suggest" id="suggest"></div>
+    <div id="card"><p class="empty">Type an @username to see that influencer: name, followers, every reel and post with Cuentos con Valores, and which products they featured.</p></div>
+  </section>
+
+  <section id="products" hidden>
+    <div class="bar">
+      <select id="product" aria-label="Product"></select>
+      <input type="search" id="pq" placeholder="Filter by @username or name" aria-label="Filter">
+    </div>
+    <p class="sub" id="ptotal"></p>
+    <div class="box"><table>
+      <thead><tr><th>Influencer</th><th>Followers</th><th class="sm-hide">First seen</th><th class="sm-hide">Posts with the product</th></tr></thead>
+      <tbody id="ptable"></tbody></table></div>
+  </section>
+
+  <section id="all" hidden>
+    <div class="bar"><input type="search" id="aq" placeholder="Filter by @username or name" aria-label="Filter"></div>
+    <div class="box"><table>
+      <thead><tr>
+        <th><button data-k="username">Influencer</button></th>
+        <th><button data-k="followers">Followers ↓</button></th>
+        <th class="sm-hide"><button data-k="reels">Reels</button></th>
+        <th class="sm-hide"><button data-k="posts">Posts</button></th>
+        <th class="sm-hide"><button data-k="first_seen">First seen</button></th>
+      </tr></thead>
+      <tbody id="atable"></tbody></table></div>
+  </section>
+</div>
+
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = n => n == null ? "?" : Number(n).toLocaleString("en-US");
+const ig = u => `https://www.instagram.com/${encodeURIComponent(u)}/`;
+const ABC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+const age = sc => [...sc.slice(0, 11)].reduce((n, ch) => n * 64 + Math.max(0, ABC.indexOf(ch)), 0);
+const day = d => d ? new Date(d + "T12:00:00").toLocaleDateString("en-GB", {day:"numeric", month:"short", year:"numeric"}) : "—";
+let INF = [], BY = {}, PROD = {}, HIST = [], POSTS = {};
+
+async function get(path, empty) {
+  try { const r = await fetch(path, {cache: "no-store"}); return r.ok ? await r.json() : empty; }
+  catch { return empty; }
+}
+
+async function load() {
+  [INF, PROD, HIST, POSTS] = await Promise.all([
+    get("data/influencers.json", []), get("data/products.json", {}), get("data/history.json", []), get("data/posts.json", {})]);
+  BY = Object.fromEntries(INF.map(e => [e.username.toLowerCase(), e]));
+  const last = HIST[0]?.date || PROD.updated;
+  document.getElementById("updated").textContent = last ? `Last scan: ${day(last)} · updates every day at 13:00` : "No scan yet";
+  renderStats(); renderScans(); renderProducts(); renderAll(); initSearch();
+}
+
+function productsOf(u) {
+  return Object.entries(PROD.products || {}).filter(([, rows]) => rows.some(r => r.username === u)).map(([p]) => p);
+}
+
+function renderStats() {
+  const reels = INF.reduce((a, e) => a + e.reels, 0), posts = INF.reduce((a, e) => a + e.posts, 0);
+  const items = [[INF.length, "influencers"], [reels, "reels"], [posts, "posts"]];
+  for (const [p, rows] of Object.entries(PROD.products || {})) items.push([rows.length, `featured ${p}`]);
+  document.getElementById("stats").innerHTML = items.map(([n, l]) => `<div class="stat"><b>${fmt(n)}</b><span>${esc(l)}</span></div>`).join("");
+}
+
+function who(u) {
+  return `<a href="#" data-open="${esc(u)}">@${esc(u)}</a>`;
+}
+
+function renderScans() {
+  const el = document.getElementById("scans");
+  if (!HIST.length) { el.innerHTML = `<p class="empty">The first daily scan with change history will appear here after the next run at 13:00.</p>`; return; }
+  el.innerHTML = HIST.slice(0, 30).map(h => {
+    const parts = [];
+    if (h.new_influencers?.length) parts.push(`<li><b>New influencers:</b> ${h.new_influencers.map(i => `${who(i.username)} (${fmt(i.followers)})`).join(", ")}</li>`);
+    if (h.new_content?.length) parts.push(`<li><b>New reels and posts:</b> ${h.new_content.map(c => `${who(c.username)} +${c.n_reels + c.n_posts}`).join(", ")}</li>`);
+    for (const [p, rows] of Object.entries(h.product_new || {})) if (rows.length)
+      parts.push(`<li><b>New with ${esc(p)}:</b> ${rows.map(r => `${who(r.username)} (${fmt(r.followers)})`).join(", ")}</li>`);
+    if (h.follower_changes?.length) parts.push(`<li><b>Follower changes:</b> ${h.follower_changes.map(f => {
+      const d = f.new - f.old; return `${who(f.username)} <span class="${d > 0 ? "up" : "down"}">${d > 0 ? "+" : ""}${fmt(d)}</span>`; }).join(", ")}</li>`);
+    if (h.gone?.length) parts.push(`<li><b>No longer showing:</b> ${h.gone.map(who).join(", ")}</li>`);
+    return `<div class="scan"><h3>${day(h.date)}</h3><p class="sum">${esc(h.summary)} · ${fmt(h.totals?.influencers)} influencers in total</p>${parts.length ? `<ul>${parts.join("")}</ul>` : ""}</div>`;
+  }).join("");
+}
+
+function renderProducts() {
+  const sel = document.getElementById("product"), names = Object.keys(PROD.products || {});
+  sel.innerHTML = names.map(p => `<option>${esc(p)}</option>`).join("") || "<option>No product set</option>";
+  const draw = () => {
+    const rows = (PROD.products || {})[sel.value] || [], f = document.getElementById("pq").value.trim().replace(/^@/, "").toLowerCase();
+    const shown = rows.filter(r => !f || r.username.toLowerCase().includes(f) || (r.name || "").toLowerCase().includes(f));
+    const week = Date.now() - 7 * 864e5;
+    document.getElementById("ptotal").textContent = rows.length ? `${rows.length} influencers have featured ${sel.value}, sorted by followers.` : "";
+    document.getElementById("ptable").innerHTML = shown.map(r => `<tr data-open="${esc(r.username)}">
+      <td class="who"><b>${esc(r.name || r.username)}${Date.parse(r.first_seen) > week ? '<span class="tag warm">new</span>' : ""}</b><small>@${esc(r.username)}</small></td>
+      <td class="n">${fmt(r.followers)}</td><td class="n sm-hide">${day(r.first_seen)}</td>
+      <td class="sm-hide">${r.posts.map(l => `<a href="${esc(l)}" target="_blank" rel="noopener">${esc(l.split("instagram.com/")[1].replace(/\/$/, ""))}</a>`).join("<br>")}</td></tr>`).join("")
+      || `<tr><td colspan="4" class="empty">No influencers match.</td></tr>`;
+  };
+  sel.onchange = draw; document.getElementById("pq").oninput = draw; draw();
+}
+
+let sortK = "followers", sortDir = -1;
+function renderAll() {
+  const draw = () => {
+    const f = document.getElementById("aq").value.trim().replace(/^@/, "").toLowerCase();
+    const rows = INF.filter(e => !f || e.username.toLowerCase().includes(f) || (e.name || "").toLowerCase().includes(f))
+      .sort((a, b) => { const x = a[sortK] ?? "", y = b[sortK] ?? ""; return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
+    document.getElementById("atable").innerHTML = rows.map(e => `<tr data-open="${esc(e.username)}">
+      <td class="who"><b>${esc(e.name || e.username)}</b><small>@${esc(e.username)}${productsOf(e.username).map(p => `<span class="tag">${esc(p)}</span>`).join("")}</small></td>
+      <td class="n">${fmt(e.followers)}</td><td class="n sm-hide">${e.reels}</td><td class="n sm-hide">${e.posts}</td><td class="n sm-hide">${day(e.first_seen)}</td></tr>`).join("")
+      || `<tr><td colspan="5" class="empty">No influencers match.</td></tr>`;
+  };
+  document.querySelectorAll("#all th button").forEach(b => b.onclick = () => {
+    sortDir = sortK === b.dataset.k ? -sortDir : (b.dataset.k === "username" ? 1 : -1); sortK = b.dataset.k;
+    document.querySelectorAll("#all th button").forEach(x => x.textContent = x.textContent.replace(/ [↑↓]$/, ""));
+    b.textContent += sortDir < 0 ? " ↓" : " ↑"; draw();
+  });
+  document.getElementById("aq").oninput = draw; draw();
+}
+
+function highlight(text, words) {
+  let out = esc(text);
+  for (const w of words) out = out.replace(new RegExp(w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), m => `<mark>${m}</mark>`);
+  return out;
+}
+
+function openCard(u) {
+  const e = BY[u.toLowerCase()];
+  const card = document.getElementById("card");
+  if (!e) { card.innerHTML = `<p class="empty">@${esc(u)} has not made any reels or posts with Cuentos con Valores (yet).</p>`; return; }
+  const prods = productsOf(e.username), words = prods.flatMap(p => [p]);
+  const items = [...e.reel_ids.map(id => ["reel", id]), ...e.post_ids.map(id => ["p", id])].sort((a, b) => age(b[1]) - age(a[1]));
+  card.innerHTML = `<div class="card">
+    <h2>${esc(e.name || e.username)}</h2>
+    <div class="meta"><span><a href="${ig(e.username)}" target="_blank" rel="noopener">@${esc(e.username)}</a></span>
+      <span><b>${fmt(e.followers)}</b> followers</span><span>${e.reels} reel${e.reels === 1 ? "" : "s"} · ${e.posts} post${e.posts === 1 ? "" : "s"} with the editorial</span>
+      <span>First seen ${day(e.first_seen)}</span></div>
+    ${prods.length ? `<div>Featured: ${prods.map(p => `<span class="tag warm">${esc(p)}</span>`).join(" ")}</div>` : ""}
+    <div class="posts">${items.map(([k, id]) => { const info = POSTS[id] || {};
+      return `<div class="post"><div class="top"><a href="https://www.instagram.com/${k}/${esc(id)}/" target="_blank" rel="noopener">${k === "reel" ? "Reel" : "Post"} ${esc(id)}</a><span>${day(info.d)}</span></div>
+      ${info.c ? `<p>${highlight(info.c.slice(0, 280) + (info.c.length > 280 ? "…" : ""), words)}</p>` : ""}</div>`; }).join("")}</div></div>`;
+}
+
+function initSearch() {
+  const q = document.getElementById("q"), sug = document.getElementById("suggest");
+  q.oninput = () => {
+    const f = q.value.trim().replace(/^@/, "").toLowerCase();
+    if (!f) { sug.innerHTML = ""; return; }
+    if (BY[f]) openCard(f);
+    sug.innerHTML = INF.filter(e => e.username.toLowerCase().includes(f) || (e.name || "").toLowerCase().includes(f))
+      .slice(0, 12).map(e => `<button data-open="${esc(e.username)}">@${esc(e.username)} · ${fmt(e.followers)}</button>`).join("");
+  };
+  q.onkeydown = ev => { if (ev.key === "Enter") openCard(q.value.trim().replace(/^@/, "")); };
+}
+
+function show(tab) {
+  document.querySelectorAll("nav button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab === tab));
+  document.querySelectorAll("section").forEach(s => s.hidden = s.id !== tab);
+}
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => show(b.dataset.tab));
+document.addEventListener("click", ev => {
+  const t = ev.target.closest("[data-open]");
+  if (!t || ev.target.closest("a[target]")) return;
+  ev.preventDefault();
+  show("search"); document.getElementById("q").value = "@" + t.dataset.open; openCard(t.dataset.open);
+  window.scrollTo({top: 0});
+});
+load();
+</script>
+</body>
+</html>

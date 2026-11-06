@@ -4,7 +4,8 @@ FROM mcr.microsoft.com/playwright/python:v1.49.1-noble
 WORKDIR /app
 RUN pip install --no-cache-dir playwright==1.49.1 && apt-get update \
     && apt-get install -y --no-install-recommends xvfb tzdata && rm -rf /var/lib/apt/lists/*
-COPY monitor.py ./
+COPY monitor.py dashboard.py ./
+COPY web ./web
 
 # A normal (non-headless) browser on a virtual screen: Instagram trusts it more than headless mode.
 ENV BROWSER=chromium HEADLESS=false HIDE_WINDOW=false PYTHONUNBUFFERED=1

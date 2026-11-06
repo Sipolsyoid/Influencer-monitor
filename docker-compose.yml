@@ -16,3 +16,14 @@ services:
       - ./reports:/app/reports                    # copies of the daily reports
       - ./browser-profile:/app/browser-profile    # browser data
       - ./instagram-session.json:/app/instagram-session.json   # Instagram login copied from your PC
+
+  dashboard:
+    build: .
+    container_name: influencer-dashboard
+    restart: unless-stopped
+    env_file: .env                # DASHBOARD_PASSWORD
+    command: ["python", "dashboard.py"]
+    ports:
+      - "8080:8080"               # open http://<server-ip>:8080
+    volumes:
+      - ./data:/app/data:ro       # read-only: the dashboard only shows what the daily scan saved
