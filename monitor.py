@@ -88,6 +88,27 @@ def parse_caption(desc):
     return text.strip().strip('".').strip()
 
 
+OG_TITLE = re.compile(r'property="og:title" content="([^"]*)"')
+SHORTCODE_ABC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+
+def post_author_name(page_html):
+    """og:title of a post page: 'Seño Alba 🌱 on Instagram: "..."' -> 'Seño Alba 🌱'"""
+    m = OG_TITLE.search(page_html or "")
+    if not m:
+        return ""
+    title = html.unescape(m.group(1))
+    return title.split(" on Instagram")[0].strip() if " on Instagram" in title else ""
+
+
+def shortcode_age(sc):
+    """Instagram post codes count up over time: a bigger number = a newer post."""
+    n = 0
+    for ch in sc[:11]:
+        n = n * 64 + max(0, SHORTCODE_ABC.find(ch))
+    return n
+
+
 def parse_name(desc):
     """'3,020 Followers, ... - See Instagram photos and videos from Asun SanBeni (@asunsanbeni)' -> 'Asun SanBeni'"""
     m = re.search(r"from (.+) \(@[A-Za-z0-9._]+\)", desc)
@@ -245,13 +266,14 @@ def scrape(page, account, delay, owners):
             blocked += 1
             continue
         try:
-            desc = og_description(fetch(page, f"/reel/{sid}/"))
+            page_html = fetch(page, f"/reel/{sid}/")
         except RateLimited:
             blocked = 1
             continue
+        desc = og_description(page_html)
         owner, date = parse_owner(desc)
         if owner:
-            owners[sid] = {"u": owner, "d": date, "c": parse_caption(desc)}
+            owners[sid] = {"u": owner, "d": date, "c": parse_caption(desc), "n": post_author_name(page_html)}
             add(owner, "reel", sid, date)
         time.sleep(delay)
     if blocked:
@@ -404,20 +426,23 @@ def fetch_captions(page, people, owners, old, delay, notes):
         for kind, bucket in (("reel", e["reels"]), ("p", e["posts"])):
             for sid in bucket:
                 if "c" not in owners.get(sid, {}):
-                    todo.append((sid in known_ids, kind, sid, u))
-    todo.sort()  # new content (not in yesterday's list) first
+                    todo.append((sid in known_ids, -shortcode_age(sid), kind, sid, u))
+    todo.sort()  # content new since yesterday first, then newest posts first
     if not todo:
         return
     log(f"Reading captions: {min(len(todo), limit)} of {len(todo)} posts without a saved caption")
-    for n, (_, kind, sid, u) in enumerate(todo[:limit], 1):
+    for n, (_, _, kind, sid, u) in enumerate(todo[:limit], 1):
         try:
-            desc = og_description(fetch(page, f"/{kind}/{sid}/"))
+            page_html = fetch(page, f"/{kind}/{sid}/")
+            desc = og_description(page_html)
         except RateLimited:
             notes.append(f"Instagram blocked caption checks after {n - 1} posts; "
                          f"{len(todo) - n + 1} captions will be read on later runs.")
             return
         entry = owners.setdefault(sid, {"u": u})
         entry["c"] = parse_caption(desc)
+        if post_author_name(page_html):
+            entry["n"] = post_author_name(page_html)
         time.sleep(delay)
     if len(todo) > limit:
         notes.append(f"{len(todo) - limit} older posts have no saved caption yet; they are read on later runs, "
@@ -702,6 +727,9 @@ def run(send=True):
         finally:
             ctx.close()
 
+    for sid, info in owners.items():
+        if info.get("n") and info.get("u") in people and not names.get(info["u"]):
+            names[info["u"]] = info["n"]
     new_list = build_snapshot(people, counts, old, names)
     product_rows, product_new = ({}, {})
     if products:
