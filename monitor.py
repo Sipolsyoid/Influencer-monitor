@@ -30,6 +30,7 @@ DATA_DIR = ROOT / "data"
 REPORTS_DIR = ROOT / "reports"
 SNAPSHOT = DATA_DIR / "influencers_reels_posts.json"
 OWNERS_FILE = DATA_DIR / "reel_owners.json"     # reel id -> who posted it (never changes, so cached)
+PRODUCTS_FILE = DATA_DIR / "product_influencers.json"   # who featured which product
 SESSION_FILE = ROOT / "instagram-session.json"   # login cookies, for copying the login to a server
 
 
@@ -78,6 +79,19 @@ def parse_owner(desc):
     except ValueError:
         date = None
     return m.group(1), date
+
+
+def parse_caption(desc):
+    """'5 likes, 0 comments - user on November 3, 2026: "Caption text"' -> 'Caption text'"""
+    m = re.search(r'on [A-Z][a-z]+ \d{1,2}, \d{4}: (.*)$', desc, re.S)
+    text = m.group(1) if m else desc
+    return text.strip().strip('".').strip()
+
+
+def parse_name(desc):
+    """'3,020 Followers, ... - See Instagram photos and videos from Asun SanBeni (@asunsanbeni)' -> 'Asun SanBeni'"""
+    m = re.search(r"from (.+) \(@[A-Za-z0-9._]+\)", desc)
+    return m.group(1).strip() if m else ""
 
 
 def parse_count(text):
@@ -160,8 +174,9 @@ def open_browser(p, headless, offscreen=False):
     return ctx, page
 
 
-def fetch(page, path, tries=3):
-    """Fetch an Instagram page from inside the logged-in browser. Returns HTML."""
+def fetch(page, path, tries=2):
+    """Fetch an Instagram page from inside the logged-in browser. Returns HTML.
+    On a rate limit (429) it waits once, then gives up; the caller leaves the rest for the next run."""
     for attempt in range(tries):
         status, text = page.evaluate(
             """async (p) => { const r = await fetch(p, {credentials: 'include'});
@@ -171,7 +186,9 @@ def fetch(page, path, tries=3):
         if status == 200:
             return text
         if status == 429:
-            wait = 120 * (attempt + 1)
+            if attempt == tries - 1:
+                break
+            wait = int(cfg("RATE_LIMIT_WAIT_SECONDS", "180"))
             log(f"Instagram rate limit (429) on {path}, waiting {wait}s")
             time.sleep(wait)
             continue
@@ -228,12 +245,13 @@ def scrape(page, account, delay, owners):
             blocked += 1
             continue
         try:
-            owner, date = parse_owner(og_description(fetch(page, f"/reel/{sid}/")))
+            desc = og_description(fetch(page, f"/reel/{sid}/"))
         except RateLimited:
             blocked = 1
             continue
+        owner, date = parse_owner(desc)
         if owner:
-            owners[sid] = {"u": owner, "d": date}
+            owners[sid] = {"u": owner, "d": date, "c": parse_caption(desc)}
             add(owner, "reel", sid, date)
         time.sleep(delay)
     if blocked:
@@ -252,18 +270,31 @@ def scrape(page, account, delay, owners):
     return people, notes
 
 
-def follower_counts(page, users, delay, notes):
-    counts = {}
-    log(f"Checking follower counts for {len(users)} accounts")
-    for i, u in enumerate(users, 1):
+def follower_counts(page, users, delay, notes, old):
+    """Refresh follower counts for at most FOLLOWER_CHECKS_PER_RUN accounts per run:
+    new creators first, then those checked longest ago. The rest keep their last known count."""
+    limit = int(cfg("FOLLOWER_CHECKS_PER_RUN", "50"))
+    order = sorted(users, key=lambda u: (u in old, old.get(u, {}).get("followers_checked", ""), u))
+    todo = order[:limit]
+    counts, names = {}, {}
+    log(f"Checking follower counts for {len(todo)} of {len(users)} accounts (rotating, oldest first)")
+    for i, u in enumerate(todo, 1):
         try:
-            counts[u] = parse_followers(og_description(fetch(page, f"/{u}/")))
+            desc = og_description(fetch(page, f"/{u}/"))
+            n = parse_followers(desc)
+            if parse_name(desc):
+                names[u] = parse_name(desc)
         except RateLimited:
-            notes.append(f"Instagram blocked follower lookups after {i - 1} of {len(users)} accounts; "
-                         "the rest keep yesterday's numbers.")
+            notes.append(f"Instagram blocked follower lookups after {i - 1} of {len(todo)} accounts; "
+                         "the rest keep their last known numbers.")
             break
+        if n is not None:
+            counts[u] = n
         time.sleep(delay)
-    return counts
+    if len(users) > limit:
+        notes.append(f"Follower counts were refreshed for {len(counts)} of {len(users)} creators today; "
+                     f"every creator is refreshed in turn, about every {-(-len(users) // limit)} days.")
+    return counts, names
 
 
 # ---------------------------------------------------------------- snapshot + diff
@@ -286,10 +317,11 @@ def load_owners(old):
     return owners
 
 
-def build_snapshot(people, counts, old):
+def build_snapshot(people, counts, old, names=None):
     out = []
     for u, e in people.items():
         followers = counts.get(u)
+        checked = datetime.now().strftime("%Y-%m-%d") if followers is not None else old.get(u, {}).get("followers_checked", "")
         if followers is None and u in old:
             followers = old[u].get("followers")
         reel_ids = sorted(e["reels"])
@@ -302,6 +334,8 @@ def build_snapshot(people, counts, old):
             "total": len(reel_ids) + len(post_ids),
             "reel_ids": reel_ids,
             "post_ids": post_ids,
+            "followers_checked": checked,
+            "name": (names or {}).get(u) or old.get(u, {}).get("name", ""),
         })
     out.sort(key=lambda o: (-o["total"], -(o["followers"] or 0), o["username"]))
     return out
@@ -341,6 +375,98 @@ def diff(old, new_list):
     return changes
 
 
+# ---------------------------------------------------------------- products
+
+def load_products():
+    """PRODUCTS in .env: products separated by ';', other spellings of the same product by '|'.
+    Example: PRODUCTS=Dragona; Girasol|Gira-sol; Ma ma ma mamut"""
+    out = {}
+    for part in (cfg("PRODUCTS", "") or "").split(";"):
+        variants = [v.strip() for v in part.split("|") if v.strip()]
+        if variants:
+            out[variants[0]] = variants
+    return out
+
+
+def plain(text):
+    """Lower case without accents, so 'Dragón' matches 'dragon'."""
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", text or "").lower() if unicodedata.category(c) != "Mn")
+
+
+def fetch_captions(page, people, owners, old, delay, notes):
+    """Make sure every reel and post has its caption in the cache (fetched once, then reused).
+    New content first; at most CAPTION_CHECKS_PER_RUN pages per run, the rest on later runs."""
+    limit = int(cfg("CAPTION_CHECKS_PER_RUN", "100"))
+    known_ids = {i for e in old.values() for i in e.get("reel_ids", []) + e.get("post_ids", [])}
+    todo = []
+    for u, e in people.items():
+        for kind, bucket in (("reel", e["reels"]), ("p", e["posts"])):
+            for sid in bucket:
+                if "c" not in owners.get(sid, {}):
+                    todo.append((sid in known_ids, kind, sid, u))
+    todo.sort()  # new content (not in yesterday's list) first
+    if not todo:
+        return
+    log(f"Reading captions: {min(len(todo), limit)} of {len(todo)} posts without a saved caption")
+    for n, (_, kind, sid, u) in enumerate(todo[:limit], 1):
+        try:
+            desc = og_description(fetch(page, f"/{kind}/{sid}/"))
+        except RateLimited:
+            notes.append(f"Instagram blocked caption checks after {n - 1} posts; "
+                         f"{len(todo) - n + 1} captions will be read on later runs.")
+            return
+        entry = owners.setdefault(sid, {"u": u})
+        entry["c"] = parse_caption(desc)
+        time.sleep(delay)
+    if len(todo) > limit:
+        notes.append(f"{len(todo) - limit} older posts have no saved caption yet; they are read on later runs, "
+                     f"{limit} per run.")
+
+
+def match_products(people, owners, new_list, products, today):
+    """Build {product: [influencer, ...]} from the saved captions, keeping each first-seen date."""
+    previous = {}
+    if PRODUCTS_FILE.exists():
+        try:
+            previous = json.loads(PRODUCTS_FILE.read_text(encoding="utf-8")).get("products", {})
+        except (ValueError, OSError):
+            previous = {}
+    snap = {e["username"]: e for e in new_list}
+    result, new_people = {}, {}
+    for product, variants in products.items():
+        keys = [plain(v) for v in variants]
+        seen_before = {i["username"]: i for i in previous.get(product, [])}
+        rows = []
+        for u, e in people.items():
+            links = []
+            for kind, bucket in (("reel", e["reels"]), ("p", e["posts"])):
+                for sid in bucket:
+                    cap = plain(owners.get(sid, {}).get("c", ""))
+                    if cap and any(k in cap for k in keys):
+                        links.append(f"https://www.instagram.com/{kind}/{sid}/")
+            if not links:
+                continue
+            row = {
+                "username": u,
+                "name": snap.get(u, {}).get("name", ""),
+                "followers": snap.get(u, {}).get("followers"),
+                "first_seen": seen_before.get(u, {}).get("first_seen", today),
+                "posts": sorted(links),
+            }
+            rows.append(row)
+            if u not in seen_before:
+                new_people.setdefault(product, []).append(row)
+        rows.sort(key=lambda r: (-(r["followers"] or 0), r["username"]))
+        result[product] = rows
+    return result, new_people
+
+
+def save_products(result, today):
+    PRODUCTS_FILE.write_text(json.dumps({"updated": today, "products": result}, ensure_ascii=False, indent=2),
+                             encoding="utf-8")
+
+
 # ---------------------------------------------------------------- report
 
 def fmt(n):
@@ -364,7 +490,7 @@ def summary_line(ch):
     return ", ".join(parts)
 
 
-def render(account, ch, new_list, notes, today):
+def render(account, ch, new_list, notes, today, product_rows=None, product_new=None):
     links = lambda ids, kind: " ".join(
         f'<a href="https://www.instagram.com/{kind}/{i}/">{kind}/{i}</a>' for i in ids)
     total_r = sum(e["reels"] for e in new_list)
@@ -426,6 +552,20 @@ def render(account, ch, new_list, notes, today):
           e.get("reels", 0), e.get("posts", 0)],
          f'@{e["username"]} (content deleted, tag removed or account made private)')
         for e in ch["gone"]])
+
+    for product, rows in (product_rows or {}).items():
+        fresh = (product_new or {}).get(product, [])
+        table(f"New influencers featuring {html.escape(product)} ({len(fresh)} new, {len(rows)} in total)",
+              ["Account", "Name", "Followers", "Posts"], [
+            ([f'<a href="{prof(r["username"])}">@{r["username"]}</a>', html.escape(r["name"] or ""),
+              fmt(r["followers"]), " ".join(f'<a href="{l}">{l.split("instagram.com/")[1].rstrip("/")}</a>'
+                                            for l in r["posts"])],
+             f'@{r["username"]} ({fmt(r["followers"])} followers): ' + " ".join(r["posts"]))
+            for r in fresh])
+        if not fresh:
+            H.append(f'<p style="color:#5f6b62">{html.escape(product)}: no new influencers today '
+                     f'({len(rows)} in total, see data/product_influencers.json).</p>')
+            T.append(f"{product}: no new influencers today ({len(rows)} in total).")
 
     if notes:
         H.append('<h3 style="margin:20px 0 6px">Notes</h3><ul>' +
@@ -544,7 +684,11 @@ def run(send=True):
             owners = load_owners(old)
             people, notes = scrape(page, account, delay, owners)
             OWNERS_FILE.write_text(json.dumps(owners, indent=0), encoding="utf-8")
-            counts = follower_counts(page, sorted(people), delay, notes)
+            counts, names = follower_counts(page, sorted(people), delay, notes, old)
+            products = load_products()
+            if products:
+                fetch_captions(page, people, owners, old, delay, notes)
+                OWNERS_FILE.write_text(json.dumps(owners, indent=0), encoding="utf-8")
             if SESSION_FILE.exists():
                 save_session(ctx)  # keep the copied login fresh
         except NotLoggedIn:
@@ -558,7 +702,10 @@ def run(send=True):
         finally:
             ctx.close()
 
-    new_list = build_snapshot(people, counts, old)
+    new_list = build_snapshot(people, counts, old, names)
+    product_rows, product_new = ({}, {})
+    if products:
+        product_rows, product_new = match_products(people, owners, new_list, products, today)
     incomplete = old and len(new_list) < 0.7 * len(old)
     if incomplete:
         notes.append(f"Only {len(new_list)} influencers were found (last time {len(old)}). "
@@ -567,7 +714,7 @@ def run(send=True):
     if not old:
         notes.append("This was the first check, so everything found is saved as the starting point.")
 
-    html_body, text_body = render(account, ch, new_list, notes, today)
+    html_body, text_body = render(account, ch, new_list, notes, today, product_rows, product_new)
     (REPORTS_DIR / f"report-{today}.html").write_text(html_body, encoding="utf-8")
     log(summary_line(ch))
 
@@ -576,6 +723,9 @@ def run(send=True):
     if not incomplete:
         SNAPSHOT.write_text(json.dumps(new_list, ensure_ascii=False, indent=2), encoding="utf-8")
         log(f"Snapshot saved: {len(new_list)} influencers")
+        if products:
+            save_products(product_rows, today)
+            log("Product list saved: " + ", ".join(f"{k} {len(v)}" for k, v in product_rows.items()))
     return 0
 
 

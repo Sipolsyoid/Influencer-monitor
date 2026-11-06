@@ -6,6 +6,7 @@ Watches an Instagram account (by default **@editorialcuentosconvalores**) and fi
 - **New reels and posts** from known influencers, with links
 - **Follower changes** of 10% or more, or 1,000+ followers
 - **Influencers who no longer show up** (content deleted, tag removed or account made private)
+- **Influencers featuring a specific product** (set `PRODUCTS`): everyone whose caption mentions it, saved in `data/product_influencers.json` with name, followers, first-seen date and links
 
 It runs on your own computer, uses a normal Chrome-based browser logged in to your Instagram, and sends email through your own email account. Nothing else is needed.
 
@@ -61,6 +62,8 @@ The setup does five things:
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD` | The email account that sends the report |
 | `RUN_TIME` | Daily time, e.g. `13:00` (run the schedule script again after changing it) |
 | `REQUEST_DELAY_SECONDS` | Pause between Instagram requests; raise it if Instagram blocks you |
+| `PRODUCTS` | Products to find in captions, e.g. `Dragona; Girasol\|Gira-sol` (`;` between products, `\|` between spellings). Empty = off |
+| `CAPTION_CHECKS_PER_RUN`, `FOLLOWER_CHECKS_PER_RUN` | How many captions / follower counts to read per run (default 100 / 50) |
 | `HIDE_WINDOW` | `true` (default) runs Chrome off-screen so no window appears; `false` shows it |
 | `HEADLESS` | `true` uses Chrome's invisible mode instead (Instagram may log it out, so keep `false`) |
 
